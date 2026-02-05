@@ -1,14 +1,19 @@
 {
-  "name": "basededatos-api",
+  "name": "mardify-backend",
   "version": "1.0.0",
-  "type": "module",
+  "description": "Buscador de cuentas Minecraft con Registro y Login",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "pg": "^8.11.5",
-    "dotenv": "^16.4.5"
-  }
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.18.2",
+    "pg": "^8.11.3"
+  },
+  "author": "",
+  "license": "ISC"
 }
