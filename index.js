@@ -14,45 +14,58 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL
 });
 
+// --- RUTA DE BÚSQUEDA ---
 app.get("/search/api/user/:user", async (req, res) => {
   const user = req.params.user;
   try {
-    // Buscamos en el disco de 128GB
     const searchTerm = `%"name": "${user}"%`;
     const q = await pool.query(
-      "SELECT id, data FROM dumps_raw WHERE data ILIKE $1 LIMIT 50",
+      "SELECT data FROM dumps_raw WHERE data ILIKE $1 LIMIT 50",
       [searchTerm]
     );
 
-    const formattedResults = q.rows.map(row => {
-      let extraido;
+    // Mapeamos para limpiar el texto y convertirlo en objeto real de JS
+    const results = q.rows.map(row => {
       try {
-        // Intentamos convertir el texto a un objeto JSON real
-        extraido = JSON.parse(row.data);
+        // Esto convierte el texto del disco en el JSON que me mostraste
+        return JSON.parse(row.data); 
       } catch (e) {
-        // Si no es JSON perfecto (como las líneas rotas que vimos), lo mandamos como texto
-        extraido = { raw_data: row.data };
+        // Si la línea está corrupta, devuelve el texto plano para no romper la web
+        return { raw: row.data };
       }
-
-      return {
-        id: row.id,
-        servidor: "MC-SERVER-DATABASE", // Aquí puedes cambiar el nombre del server
-        detalles: extraido // <--- AQUÍ VA TODO: IP, PASSWORD, NAME, ETC.
-      };
     });
 
-    res.json({ 
-      found: q.rows.length > 0, 
-      results: formattedResults 
-    });
+    // Enviamos el array directo como querías
+    res.json(results); 
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: "Error en el disco local" });
   }
 });
 
-// ... (Rutas de Login y Register se mantienen igual)
+// --- REGISTRO Y LOGIN (Se mantienen igual) ---
+app.post('/register', async (req, res) => {
+  const { email, password } = req.body;
+  const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  try {
+    const checkIp = await pool.query("SELECT COUNT(*) FROM usuarios WHERE ip_address = $1", [userIp]);
+    if (parseInt(checkIp.rows[0].count) >= 2) return res.status(403).json({ error: "Límite de IPs" });
+    await pool.query("INSERT INTO usuarios (email, password, ip_address) VALUES ($1, $2, $3)", [email, password, userIp]);
+    res.status(201).json({ message: "OK" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const q = await pool.query("SELECT id, email FROM usuarios WHERE email = $1 AND password = $2", [email, password]);
+    if (q.rows.length > 0) res.json(q.rows[0]);
+    else res.status(401).json({ error: "Fail" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Mardify Engine Corriendo - Mostrando todo el JSON`);
+  console.log(`🚀 Mardify Raw Engine en puerto ${PORT}`);
 });
