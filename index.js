@@ -14,72 +14,48 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL
 });
 
-// --- RUTA DE BÚSQUEDA (LA QUE ARREGLA TODO) ---
+// --- RUTA DE BÚSQUEDA: MODO ESPEJO (LO QUE HAY EN EL DISCO SALE A LA WEB) ---
 app.get("/search/api/user/:user", async (req, res) => {
   const user = req.params.user;
   try {
+    // Buscamos en tu disco de 128GB sin piedad
     const searchTerm = `%"name": "${user}"%`;
     const q = await pool.query(
-      "SELECT data FROM dumps_raw WHERE data ILIKE $1 LIMIT 50",
+      "SELECT data FROM dumps_raw WHERE data ILIKE $1 LIMIT 100",
       [searchTerm]
     );
 
-    const results = q.rows.map(row => {
-      // 1. Limpiamos la línea de espacios y comas locas al final
-      let cleanData = row.data.trim();
-      if (cleanData.endsWith(',')) cleanData = cleanData.slice(0, -1);
+    // NO HAY MAP, NO HAY PARSE, NO HAY FILTROS. 
+    // Enviamos el texto crudo tal cual está en la columna 'data'
+    const rawResults = q.rows.map(row => row.data);
 
-      try {
-        // 2. Intentamos convertirlo en objeto JSON real
-        const parsed = JSON.parse(cleanData);
-        
-        // Si el JSON no trae IP de servidor, le ponemos una etiqueta para que no quede vacío
-        if (!parsed.serverip && !parsed.ip) {
-          parsed.origin_info = "Data sin IP de servidor origen";
-        }
-        
-        return parsed; 
-      } catch (e) {
-        // 3. Si la línea está rota (como las que viste con "raw"), la mandamos limpia
-        // pero intentamos que el frontend vea algo útil
-        return { 
-          name: user, 
-          status: "Registro Parcial",
-          raw_content: cleanData 
-        };
-      }
-    });
-
-    res.json(results); 
+    res.json(rawResults); 
 
   } catch (err) {
-    console.error("Error en disco local:", err.message);
-    res.status(500).json({ error: "Error en el servidor de almacenamiento" });
+    console.error(err);
+    res.status(500).json({ error: "Error en el disco local" });
   }
 });
 
-// --- REGISTRO Y LOGIN ---
+// --- REGISTRO Y LOGIN (MANTENLOS POR SI ACASO) ---
 app.post('/register', async (req, res) => {
   const { email, password } = req.body;
   const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   try {
-    const checkIp = await pool.query("SELECT COUNT(*) FROM usuarios WHERE ip_address = $1", [userIp]);
-    if (parseInt(checkIp.rows[0].count) >= 2) return res.status(403).json({ error: "Límite: 2 cuentas por IP." });
     await pool.query("INSERT INTO usuarios (email, password, ip_address) VALUES ($1, $2, $3)", [email, password, userIp]);
-    res.status(201).json({ message: "OK" });
-  } catch (err) { res.status(500).json({ error: "Error en DB" }); }
+    res.status(201).send("OK");
+  } catch (err) { res.status(500).send("Error"); }
 });
 
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   try {
-    const q = await pool.query("SELECT id, email FROM usuarios WHERE email = $1 AND password = $2", [email, password]);
-    if (q.rows.length > 0) res.json(q.rows[0]);
-    else res.status(401).json({ error: "No encontrado" });
-  } catch (err) { res.status(500).json({ error: "Error en DB" }); }
+    const q = await pool.query("SELECT * FROM usuarios WHERE email = $1 AND password = $2", [email, password]);
+    res.json(q.rows[0] || { error: "No" });
+  } catch (err) { res.status(500).send("Error"); }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Mardify Engine: Todo el contenido JSON habilitado`);
+  console.log(`🚀 MODO BRUTO ACTIVADO. Escupiendo el disco de 128GB tal cual.`);
 });
