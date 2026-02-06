@@ -10,51 +10,71 @@ app.use(cors());
 app.use(express.json());
 app.set('trust proxy', true);
 
+// Configuración del Pool con el certificado SSL para Render
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false, // Permite la conexión segura en Render
+    ca: process.env.DB_CERT,    // El texto del root.crt que pegaste en el panel
+  }
 });
 
+// --- RUTA DE BÚSQUEDA HÍBRIDA ---
 app.get("/search/api/user/:user", async (req, res) => {
   const user = req.params.user;
   try {
-    const searchTerm = `%"name": "${user}"%`;
+    // Buscamos en 'email' (registros web) O en 'data' (3.4M registros de dumps)
     const q = await pool.query(
-      "SELECT data FROM dumps_raw WHERE data ILIKE $1 LIMIT 100",
-      [searchTerm]
+      `SELECT email, password, ip_address, data 
+       FROM usuarios 
+       WHERE email ILIKE $1 
+       OR data->>'name' ILIKE $1 
+       LIMIT 100`,
+      [`%${user}%`]
     );
 
     const results = q.rows.map(row => {
-      let raw = row.data.trim();
-
-      // --- LOGICA DE REPARACIÓN DE LÍNEA ---
-      // 1. Quitar comas al final
-      if (raw.endsWith(',')) raw = raw.slice(0, -1);
+      // 1. Si tiene email, es un registro directo de tu web
+      if (row.email) {
+        return {
+          source: "Registro Web",
+          email: row.email,
+          password: row.password,
+          ip: row.ip_address,
+          date: row.created_at
+        };
+      } 
       
-      // 2. Si la línea no empieza con {, se la ponemos (porque está rota en tu disco)
-      if (!raw.startsWith('{')) raw = '{' + raw;
-      
-      // 3. Si no termina con }, se la ponemos
-      if (!raw.endsWith('}')) raw = raw + '}';
-
-      try {
-        // Intentamos enviarlo como JSON limpio
-        return JSON.parse(raw);
-      } catch (e) {
-        // Si falla hasta con la reparación, mandamos la línea tal cual para que no te falte info
-        return { error: "Línea muy dañada", content: raw };
-      }
+      // 2. Si no, devolvemos el objeto JSON de los dumps que ya está limpio
+      return row.data;
     });
 
     res.json(results); 
 
   } catch (err) {
-    res.status(500).json({ error: "Error en el disco de 128GB" });
+    console.error("❌ Error en la DB:", err);
+    res.status(500).json({ error: "Error al consultar la base de datos en la nube" });
   }
 });
 
-// ... (Login/Register igual)
+// --- EJEMPLO RUTA DE REGISTRO WEB ---
+app.post("/api/register", async (req, res) => {
+  const { email, password } = req.body;
+  const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+  try {
+    await pool.query(
+      "INSERT INTO usuarios (email, password, ip_address) VALUES ($1, $2, $3)",
+      [email, password, ip]
+    );
+    res.json({ success: true, message: "Usuario registrado en la web" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al registrar usuario" });
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Mardify Engine: Reparando JSONs rotos en vivo`);
+  console.log(`🚀 Mardify Engine: Conectado a la nube (3.4M registros listos)`);
 });
