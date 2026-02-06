@@ -6,7 +6,7 @@ import 'dotenv/config';
 const { Pool } = pkg;
 const app = express();
 
-// --- CONFIGURACIÓN DE MIDDLEWARES ---
+// --- CONFIGURACIÓN ---
 app.use(cors()); 
 app.use(express.json());
 app.set('trust proxy', true);
@@ -17,53 +17,58 @@ const pool = new Pool({
 
 // --- RUTAS ---
 
-// 1. Búsqueda Mejorada (Corregida)
+// 1. Búsqueda con información de Servidor
 app.get("/search/api/user/:user", async (req, res) => {
   const user = req.params.user;
   try {
-    // Buscamos ignorando mayúsculas/minúsculas y manejando mejor el formato JSON
-    // Buscamos la secuencia "name": "el_nombre"
     const searchTerm = `%"name": "${user}"%`;
     
+    // Traemos los datos de tu disco de 128GB
     const q = await pool.query(
-      "SELECT data FROM dumps_raw WHERE data ILIKE $1 LIMIT 20",
+      "SELECT id, data FROM dumps_raw WHERE data ILIKE $1 LIMIT 40",
       [searchTerm]
     );
 
+    // Formateamos los resultados para que el frontend sepa qué mostrar
+    const formattedResults = q.rows.map(row => {
+      return {
+        id: row.id,
+        servidor: "MARDIFY-LOCAL-STORAGE", // Aquí puedes poner el nombre de tu servidor
+        contenido: row.data,
+        fecha_registro: new Date().toLocaleDateString() 
+      };
+    });
+
     res.json({ 
       found: q.rows.length > 0, 
-      results: q.rows 
+      results: formattedResults 
     });
   } catch (err) {
-    console.error("Error en búsqueda:", err.message);
-    res.status(500).json({ error: "Error interno en el servidor" });
+    console.error("Error:", err.message);
+    res.status(500).json({ error: "Error conectando con el disco local" });
   }
 });
 
-// 2. Registro con límite de 2 IPs (Corregido)
+// 2. Registro (Asegúrate de haber corrido: ALTER TABLE usuarios ADD COLUMN ip_address TEXT;)
 app.post('/register', async (req, res) => {
   const { email, password } = req.body;
-  // Detectar la IP correctamente incluso detrás del proxy de Render
   const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
   try {
-    // Primero verificamos cuántas veces existe esta IP
     const checkIp = await pool.query("SELECT COUNT(*) FROM usuarios WHERE ip_address = $1", [userIp]);
     
     if (parseInt(checkIp.rows[0].count) >= 2) {
-      return res.status(403).json({ error: "Límite: Solo 2 cuentas por IP." });
+      return res.status(403).json({ error: "Máximo 2 cuentas por IP." });
     }
 
-    // Insertar el nuevo usuario
     await pool.query(
       "INSERT INTO usuarios (email, password, ip_address) VALUES ($1, $2, $3)",
       [email, password, userIp]
     );
 
-    res.status(201).json({ message: "Usuario registrado con éxito" });
+    res.status(201).json({ message: "Registrado en Mardify" });
   } catch (err) {
-    console.error("Error en registro:", err.message);
-    res.status(500).json({ error: "No se pudo registrar el usuario" });
+    res.status(500).json({ error: "Error en base de datos local" });
   }
 });
 
@@ -77,18 +82,17 @@ app.post('/login', async (req, res) => {
     );
 
     if (q.rows.length > 0) {
-      res.json({ message: "Login exitoso", user: q.rows[0] });
+      res.json({ message: "Bienvenido", user: q.rows[0] });
     } else {
-      res.status(401).json({ error: "Email o contraseña incorrectos" });
+      res.status(401).json({ error: "Credenciales inválidas" });
     }
   } catch (err) {
-    console.error("Error en login:", err.message);
-    res.status(500).json({ error: "Error en el servidor" });
+    res.status(500).json({ error: "Error de conexión" });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor activo en puerto ${PORT}`);
-  console.log(`🔗 Conectado a la base de datos en tu PC local`);
+  console.log(`🚀 Sistema Mardify Online en puerto ${PORT}`);
+  console.log(`💿 Almacenamiento: Disco 128GB conectado`);
 });
