@@ -9,7 +9,7 @@ import 'dotenv/config';
 const { Pool } = pkg;
 const app = express();
 
-// --- 1. CONFIGURACIÓN DE CARPETAS Y MULTER ---
+// --- 1. CONFIGURACIÓN DE STORAGE ---
 const uploadDir = './uploads';
 if (!fs.existsSync(uploadDir)) { fs.mkdirSync(uploadDir, { recursive: true }); }
 
@@ -32,51 +32,49 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// --- 2. ENDPOINT: SETUP DE PERFIL (EL QUE DABA ERROR 500) ---
+// --- 2. EL FIX: SETUP DE PERFIL ---
 app.post("/api/user/setup", upload.single('photo'), async (req, res) => {
   try {
-    // Extraemos userId como string para evitar problemas con números grandes
     const { userId, newName } = req.body; 
     const photoUrl = req.file ? `/uploads/${req.file.filename}` : null;
 
-    console.log(`Buscando usuario ID: ${userId} para actualizar...`);
-
     if (!userId || !newName) {
-      return res.status(400).json({ error: "Faltan campos: userId o newName" });
+      return res.status(400).json({ error: "Faltan datos obligatorios." });
     }
 
-    // UPDATE: Usamos el ID como string para CockroachDB
+    // EL TRUCO: Forzamos el ID a BIGINT ($3::BIGINT) para que CockroachDB 
+    // lo acepte aunque el frontend lo mande como string.
     const query = `
       UPDATE usuarios 
       SET display_name = $1, avatar_url = $2, is_active = true 
-      WHERE id = $3::string
-      RETURNING id, email, display_name, avatar_url, is_active;
+      WHERE id = $3::BIGINT
+      RETURNING id, display_name, avatar_url, is_active;
     `;
 
     const result = await pool.query(query, [newName, photoUrl, userId]);
 
-    // Si result.rows es vacío, el ID no existe en la DB
     if (result.rows.length === 0) {
-      console.error("❌ Usuario no encontrado en la DB");
-      return res.status(404).json({ error: "Usuario no encontrado. El ID no existe en CockroachDB." });
+      return res.status(404).json({ error: "No se encontró el usuario en la base de datos." });
     }
     
-    console.log("✅ Perfil actualizado correctamente");
     res.json({ 
       success: true, 
-      user: result.rows[0]
+      user: {
+        ...result.rows[0],
+        id: result.rows[0].id.toString() // Devolvemos como string para el frontend
+      }
     });
 
   } catch (err) {
-    console.error("🔥 Error Interno:", err.message);
+    console.error("🔥 Error de CockroachDB:", err.message);
     res.status(500).json({ 
-      error: "Error interno del servidor", 
+      error: "Error en la base de datos", 
       detalles: err.message 
     });
   }
 });
 
-// --- 3. TUS OTRAS RUTAS (MANTENIDAS) ---
+// --- 3. LOGIN (MANTENIDO Y SEGURO) ---
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -86,7 +84,7 @@ app.post("/api/login", async (req, res) => {
       res.json({ 
         success: true, 
         user: {
-          id: user.id.toString(), // Siempre enviar ID como string
+          id: user.id.toString(), 
           email: user.email,
           display_name: user.display_name || user.email.split('@')[0],
           avatar_url: user.avatar_url,
@@ -99,7 +97,30 @@ app.post("/api/login", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Resto de rutas (Search, Register, Chat history...) se mantienen igual.
+// --- 4. FINDER (128GB DISK CONNECTION) ---
+app.get("/search/api/user/:user", async (req, res) => {
+  const user = req.params.user;
+  try {
+    // Buscamos en tu tabla de 128GB
+    const q = await pool.query(
+      "SELECT data FROM dumps_raw WHERE data->>'name' = $1 LIMIT 100",
+      [user]
+    );
+    res.json(q.rows.map(row => row.data)); 
+  } catch (err) { res.status(500).json({ error: "Error en búsqueda", detalles: err.message }); }
+});
+
+// --- 5. CHAT GLOBAL ---
+app.get("/api/chat/history", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT m.texto, u.display_name, u.avatar_url, m.created_at 
+      FROM mensajes_chat m 
+      JOIN usuarios u ON m.usuario_id = u.id 
+      ORDER BY m.created_at ASC LIMIT 50`);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: "Error de chat" }); }
+});
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Finder Engine Online on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Finder Engine Online en puerto ${PORT}`));
